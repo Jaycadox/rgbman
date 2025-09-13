@@ -1,0 +1,14 @@
+[package]
+name = "rgbman"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+chrono = "0.4.42"
+hyper = { version = "0.14", features = ["full"] }
+openrgb2 = "0.3.0"
+tokio = { version = "1.47.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-journald = "0.3.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+    <body>
+        <h1>Control</h1>
+        <button onclick="sendCommand('/start_on')">Start On</button>
+        <button onclick="sendCommand('/start_off')">Start Off</button>
+        <p id="status">test</p>
+        <script>
+            async function sendCommand(path) {
+                try {
+                    let resp = await fetch(path);
+                    let text = await resp.text();
+                    // show result and then go "back" to main page
+                    document.getElementById("status").textContent = text;
+                    //alert("Server says: " + text);
+                    // Optionally just stay on page:
+                    // location.reload();
+                } catch (e) {
+                    alert("Error: " + e);
+                }
+            }
+        </script>
+    </body>
+</html>
