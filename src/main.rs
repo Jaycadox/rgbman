@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
     let (tx, _rx) = broadcast::channel(8);
     let (rgb_tx, rgb_rx) = tokio::sync::mpsc::channel(8);
 
-    tokio::spawn(run_rgb_server(rgb_rx)); // NEVER CALLS THE INTERNAL, EVEN IF I DONT RUN ON THE SINGLE THREADED RUNTIME
+    tokio::spawn(run_rgb_server(rgb_rx));
     let tx1 = tx.clone();
     let make_svc = make_service_fn(move |_| {
         let tx = tx.clone();
