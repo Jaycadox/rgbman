@@ -3,13 +3,17 @@ use chrono::{Local, Timelike};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Server};
 use hyper::{Request, Response};
-use openrgb2::{Color, DeviceType, OpenRgbClient};
 use std::convert::Infallible;
 use std::env;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{Subscriber, info};
+use tracing::{Subscriber, error, info};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
+
+mod auda0_e6k5_0101_dram;
+mod gigabyte_rgb_fusion2_usb;
+use auda0_e6k5_0101_dram as dram;
+use gigabyte_rgb_fusion2_usb as fusion2;
 
 #[derive(PartialEq, Clone, Debug)]
 enum Mode {
@@ -48,59 +52,32 @@ fn init_tracing() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
-async fn run_rgb_server(mut new_led_state: tokio::sync::mpsc::Receiver<f32>) -> Result<()> {
+async fn run_rgb_server(new_led_state: &mut tokio::sync::watch::Receiver<f32>) -> Result<()> {
     info!("rgb server: starting...");
-    let client = OpenRgbClient::connect().await?;
-    let mobo = client
-        .get_controllers_of_type(DeviceType::Motherboard)
-        .await?;
-    let dram = client.get_controllers_of_type(DeviceType::DRam).await?;
+    let mut dram = dram::I2cDram::new(vec![0x71, 0x73])?;
+    let mut fans = fusion2::Fusion2Argb::new()?;
 
-    let mobo_controllers = mobo.controllers();
-    let dram_controllers = dram.controllers();
+    info!(message = "rgb server ready",);
 
-    info!(
-        message = "rgb server ready",
-        motherboard_controlers = mobo_controllers.len(),
-        ram_controllers = dram_controllers.len(),
-    );
-
-    // NOTE: perhaps we should use a data type which only looks at the latest event
-    while let Some(x) = new_led_state.recv().await {
-        for controller in mobo_controllers {
-            controller
-                .set_all_leds(Color::new(
-                    (54.0 * x) as u8,
-                    (28.0 * x) as u8,
-                    (15.0 * x) as u8,
-                ))
-                .await?;
-        }
-        for controller in dram_controllers {
-            controller
-                .set_all_leds(Color::new(
-                    (89.0 * x) as u8,
-                    (60.0 * x) as u8,
-                    (46.0 * x) as u8,
-                ))
-                .await?;
-        }
+    loop {
+        new_led_state.changed().await?;
+        let x = *new_led_state.borrow();
+        fans.set_led_colour((54.0 * x) as u8, (28.0 * x) as u8, (15.0 * x) as u8)?;
+        dram.set_led_colour((89.0 * x) as u8, (60.0 * x) as u8, (46.0 * x) as u8)?;
     }
-
-    Ok(())
 }
 
 async fn run_state_machine(
     starting_state: State,
     mut long_wait_when_idle: bool,
-    send_rgb_value: tokio::sync::mpsc::Sender<f32>,
+    send_rgb_value: tokio::sync::watch::Sender<f32>,
 ) -> Result<()> {
     let mut state = starting_state;
     loop {
         let old_state = state.clone();
         state = match state {
             State::SetColourThen(x, new_state) => {
-                send_rgb_value.send(x).await?;
+                send_rgb_value.send(x)?;
                 *new_state
             }
             State::Fading(mode, raw_x) => {
@@ -187,9 +164,17 @@ async fn handle(
 async fn main() -> Result<()> {
     init_tracing();
     let (tx, _rx) = broadcast::channel(8);
-    let (rgb_tx, rgb_rx) = tokio::sync::mpsc::channel(8);
+    let (rgb_tx, mut rgb_rx) = tokio::sync::watch::channel(0.0);
 
-    tokio::spawn(run_rgb_server(rgb_rx));
+    tokio::spawn(async move {
+        loop {
+            match run_rgb_server(&mut rgb_rx).await {
+                Ok(_) => break,
+                Err(e) => error!("Error: {e:?}"),
+            };
+        }
+    });
+
     let tx1 = tx.clone();
     let make_svc = make_service_fn(move |_| {
         let tx = tx.clone();
@@ -204,7 +189,6 @@ async fn main() -> Result<()> {
         loop {
             let rgb_tx = rgb_tx.clone();
             if last_task.is_none() {
-                tokio::time::sleep(Duration::from_secs(3)).await;
                 last_task = Some(tokio::spawn(async {
                     run_state_machine(State::Turning(Mode::On), false, rgb_tx).await
                 }));

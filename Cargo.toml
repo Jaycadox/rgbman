@@ -7,8 +7,9 @@ edition = "2024"
 anyhow = "1.0.99"
 chrono = "0.4.42"
 hyper = { version = "0.14", features = ["full"] }
-openrgb2 = "0.3.0"
 tokio = { version = "1.47.1", features = ["full"] }
 tracing = "0.1.41"
 tracing-journald = "0.3.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+hidapi = "2.6.3"
+i2c-linux = "0.1.2"
