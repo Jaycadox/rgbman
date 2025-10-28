@@ -1,11 +1,16 @@
 use anyhow::Result;
 use chrono::{Local, Timelike};
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Server};
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
 use hyper::{Request, Response};
+use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::env;
+use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{Subscriber, error, info};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
@@ -87,7 +92,7 @@ async fn run_state_machine(
                 };
 
                 if raw_x > 0.08 {
-                    if raw_x != 1.0 {
+                    if (raw_x - 1.0).abs() > 0.01 {
                         tokio::time::sleep(Duration::from_millis(80)).await;
                     }
                     State::SetColourThen(x * 0.2, Box::new(State::Fading(mode, raw_x * 0.2)))
@@ -100,12 +105,12 @@ async fn run_state_machine(
                 Mode::Off => State::SetColourThen(0.0, Box::new(State::Idle(mode))),
             },
             State::Idle(mode) => {
-                if !long_wait_when_idle {
-                    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
-                } else {
+                if long_wait_when_idle {
                     tokio::time::sleep(Duration::from_secs(60 * 60 * 3)).await;
+                    long_wait_when_idle = false;
+                } else {
+                    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
                 }
-                long_wait_when_idle = false;
                 let hour = Local::now().hour();
                 if (8..18).contains(&hour) {
                     if mode == Mode::Off {
@@ -134,28 +139,30 @@ async fn run_state_machine(
 }
 
 async fn handle(
-    req: Request<Body>,
+    req: Request<Incoming>,
     tx: tokio::sync::broadcast::Sender<State>,
-) -> Result<Response<Body>, Infallible> {
+) -> Result<Response<Full<Bytes>>, Infallible> {
     let path = req.uri().path();
 
     match path {
         "/start_on" => {
             let _ = tx.send(State::Fading(Mode::On, 1.0));
-            Ok(Response::new(Body::from("Starting: ON")))
+            Ok(Response::new(Full::new(Bytes::from("Starting: ON"))))
         }
         "/start_off" => {
             let _ = tx.send(State::Fading(Mode::Off, 1.0));
-            Ok(Response::new(Body::from("Starting: OFF")))
+            Ok(Response::new(Full::new(Bytes::from("Starting: OFF"))))
         }
-        "/stop" => Ok(Response::new(Body::from("Stopped state machine"))),
+        "/stop" => Ok(Response::new(Full::new(Bytes::from(
+            "Stopped state machine",
+        )))),
         "/" => {
             let html = include_str!("index.html");
-            Ok(Response::new(Body::from(html)))
+            Ok(Response::new(Full::new(Bytes::from(html))))
         }
         _ => Ok(Response::builder()
             .status(404)
-            .body(Body::from("Not found"))
+            .body(Full::new(Bytes::from("Not found")))
             .unwrap()),
     }
 }
@@ -169,18 +176,13 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             match run_rgb_server(&mut rgb_rx).await {
-                Ok(_) => break,
+                Ok(()) => break,
                 Err(e) => error!("Error: {e:?}"),
-            };
+            }
         }
     });
 
     let tx1 = tx.clone();
-    let make_svc = make_service_fn(move |_| {
-        let tx = tx.clone();
-        async move { Ok::<_, Infallible>(service_fn(move |req| handle(req, tx.clone()))) }
-    });
-
     tokio::spawn(async move {
         let tx = tx1.clone();
         let mut rx = tx.subscribe();
@@ -205,10 +207,23 @@ async fn main() -> Result<()> {
         }
     });
 
-    let addr = ([0, 0, 0, 0], 3000).into();
-    info!("listening on: http://{}", addr);
-    if let Err(e) = Server::bind(&addr).serve(make_svc).await {
-        eprintln!("server error: {}", e);
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let listener = TcpListener::bind(addr).await?;
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+        let tx = tx.clone();
+
+        let service = service_fn(move |req| {
+            let tx = tx.clone();
+            async move { handle(req, tx).await }
+        });
+
+        tokio::spawn(async move {
+            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                error!("Error handling connection: {err:?}");
+            }
+        });
     }
-    Ok(())
 }

@@ -61,7 +61,7 @@ impl I2cDram {
             Self::register_write(&mut self.i2c, 0x8020, 1)?;
             Self::register_write(&mut self.i2c, 0x80A0, 1)?;
             for i in 0..self.led_count {
-                Self::register_write_block(&mut self.i2c, 0x8100 + (3 * i as u16), &[r, b, g])?;
+                Self::register_write_block(&mut self.i2c, 0x8100 + (3 * u16::from(i)), &[r, b, g])?;
             }
         }
         Ok(())

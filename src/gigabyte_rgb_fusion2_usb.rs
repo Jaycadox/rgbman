@@ -1,6 +1,4 @@
-use std::{ffi::CString, str::FromStr};
-
-use anyhow::Result;
+use anyhow::{Context, Result};
 use hidapi::{HidApi, HidDevice, HidResult};
 
 pub struct Fusion2Argb {
@@ -10,11 +8,16 @@ pub struct Fusion2Argb {
 
 impl Fusion2Argb {
     const RID: u8 = 0xCC;
-    const ALL_LEDS: i32 = -1;
 
     pub fn new() -> Result<Self> {
         let api = HidApi::new()?;
-        let dev = api.open_path(CString::from_str("/dev/hidraw15").unwrap().as_c_str())?;
+        let wanted_dev = api
+            .device_list()
+            .find(|x| {
+                x.vendor_id() == 0x48D && x.product_id() == 0x5711 && x.usage_page() == 0xFF89
+            })
+            .context("failed to find Gigabyte RGB Fusion 2 USB device")?;
+        let dev = api.open_path(wanted_dev.path())?;
         Self::send64(&dev, 0x60, 0x00, 0x00)?;
 
         for reg in 0x20..=0x27 {
@@ -46,7 +49,7 @@ impl Fusion2Argb {
     pub fn set_led_colour(&mut self, r: u8, g: u8, b: u8) -> Result<()> {
         self.effect_mask |= 0x01 | 0x02 | 0x08 | 0x10;
         self.effect_mask |= 0x10;
-        let pkt = PktEffect::for_led(Self::ALL_LEDS, 0x5711, Self::RID)
+        let pkt = PktEffect::all_leds(Self::RID)
             .with_effect_type(effect::STATIC)
             .with_brightness(0xFF, 0xFF)
             .with_color0_rgb(r, g, b)
@@ -86,23 +89,12 @@ struct PktEffect {
 }
 
 impl PktEffect {
-    pub fn for_led(led_index: i32, pid: u16, report_id: u8) -> Self {
+    pub fn all_leds(report_id: u8) -> Self {
         let mut pkt = Self::blank();
         pkt.report_id = report_id;
 
-        if led_index < 0 {
-            pkt.header = 0x20;
-            pkt.zone0 = if pid == 0x5711 { 0x07FF } else { 0x00FF };
-        } else if led_index < 8 {
-            pkt.header = 0x20 + led_index as u8;
-            pkt.zone0 = 1u32 << (led_index as u32);
-        } else if led_index < 11 {
-            pkt.header = 0x90 + (led_index as u8 - 8);
-            pkt.zone0 = 1u32 << (led_index as u32);
-        } else {
-            pkt.header = 0;
-            pkt.zone0 = 0;
-        }
+        pkt.header = 0x20;
+        pkt.zone0 = 0x07FF;
         pkt
     }
 
@@ -141,8 +133,8 @@ impl PktEffect {
     }
 
     pub fn with_color0_rgb(mut self, r: u8, g: u8, b: u8) -> Self {
-        self.color0 = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-        self.color1 = 0xffffff;
+        self.color0 = ((u32::from(r)) << 16) | ((u32::from(g)) << 8) | (u32::from(b));
+        self.color1 = 0x00ff_ffff;
         self
     }
 
