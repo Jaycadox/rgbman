@@ -11,7 +11,7 @@ pub struct I2cDram {
 impl I2cDram {
     fn register_read(i2c: &mut I2c<File>, reg: u16) -> Result<u8> {
         i2c.smbus_write_word_data(0x0, ((reg << 8) & 0xFF00) | ((reg >> 8) & 0x00FF))?;
-        return Ok(i2c.smbus_read_byte_data(0x81)?);
+        Ok(i2c.smbus_read_byte_data(0x81)?)
     }
 
     fn register_write(i2c: &mut I2c<File>, reg: u16, val: u8) -> Result<()> {
@@ -55,7 +55,7 @@ impl I2cDram {
         })
     }
 
-    pub fn set_led_colour(self: &mut Self, r: u8, g: u8, b: u8) -> Result<()> {
+    pub fn set_led_colour(&mut self, r: u8, g: u8, b: u8) -> Result<()> {
         for address in &self.addresses {
             self.i2c.smbus_set_slave_address(*address, false)?;
             Self::register_write(&mut self.i2c, 0x8020, 1)?;
