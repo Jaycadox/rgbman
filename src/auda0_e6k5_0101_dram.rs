@@ -27,8 +27,31 @@ impl I2cDram {
     }
 
     pub fn new(addresses: Vec<u16>) -> Result<I2cDram> {
-        let mut i2c = I2c::from_path("/dev/i2c-2")?;
-        for address in &addresses {
+        let mut last_error = None;
+
+        for bus in 0..=16 {
+            let path = format!("/dev/i2c-{}", bus);
+            match Self::try_init(&path, &addresses) {
+                Ok((i2c, led_count)) => {
+                    return Ok(Self {
+                        addresses,
+                        i2c,
+                        led_count,
+                    });
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("no i2c buses available")))
+    }
+
+    fn try_init(path: &str, addresses: &[u16]) -> Result<(I2c<File>, u8)> {
+        let mut i2c = I2c::from_path(path)?;
+
+        for address in addresses {
             i2c.smbus_set_slave_address(*address, false)?;
             i2c.smbus_read_byte()?;
 
@@ -48,13 +71,8 @@ impl I2cDram {
         }
         let led_count = config_table[2];
 
-        Ok(Self {
-            addresses,
-            i2c,
-            led_count,
-        })
+        Ok((i2c, led_count))
     }
-
     pub fn set_led_colour(&mut self, r: u8, g: u8, b: u8) -> Result<()> {
         for address in &self.addresses {
             self.i2c.smbus_set_slave_address(*address, false)?;
